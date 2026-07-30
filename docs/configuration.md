@@ -1202,24 +1202,31 @@ Preview:
 | Keys | Action | Condition |
 | ---- | ------ | --------- |
 | <kbd>S</kbd> | Focus the search bar | Not already focused on another input field |
-| <kbd>Enter</kbd> | Perform search in the same tab | Search input is focused and not empty |
+| <kbd>Enter</kbd> | Perform search in the same tab, or open the highlighted bookmark suggestion | Search input is focused and not empty |
 | <kbd>Ctrl</kbd> + <kbd>Enter</kbd> | Perform search in a new tab | Search input is focused and not empty |
 | <kbd>Escape</kbd> | Leave focus | Search input is focused |
-| <kbd>Up</kbd> | Insert the last search query since the page was opened into the input field | Search input is focused |
+| <kbd>Up</kbd> / <kbd>Down</kbd> | Navigate bookmark suggestions, or (Up only) insert the last search query if no suggestions are shown | Search input is focused |
+| <kbd>Tab</kbd> | Cycle to the next search engine | Search input is focused and `mode: tab` is set |
 
 > [!TIP]
 >
 > You can use the property `new-tab` with a value of `true` if you want to show search results in a new tab by default. <kbd>Ctrl</kbd> + <kbd>Enter</kbd> will then show results in the same tab.
 
+#### Bookmark suggestions
+As you type, the search widget shows a dropdown of up to 5 matching bookmarks from any [bookmarks widget](#bookmarks-widget) already rendered on the current page, matched by title. This is purely client-side and doesn't require any extra configuration — it's automatically disabled if no bookmarks are present on the page, and can be turned off explicitly with `hide-suggestions: true`.
+
 #### Properties
 | Name | Type | Required | Default |
 | ---- | ---- | -------- | ------- |
 | search-engine | string | no | duckduckgo |
+| mode | string | no | bangs |
+| engines | array | no | |
 | new-tab | boolean | no | false |
 | autofocus | boolean | no | false |
 | target | string | no | _blank |
 | placeholder | string | no | Type here to search… |
 | bangs | array | no | |
+| hide-suggestions | boolean | no | false |
 
 ##### `search-engine`
 Either a value from the table below or a URL to a custom search engine. Use `{QUERY}` to indicate where the query value gets placed.
@@ -1278,6 +1285,33 @@ url: https://www.reddit.com/search?q={QUERY}
 url: https://store.steampowered.com/search/?term={QUERY}
 url: https://www.amazon.com/s?k={QUERY}
 ```
+
+##### `mode`
+Controls how you switch between multiple search engines. Either `bangs` (default, described above — type a shortcut like `!yt` to switch) or `tab` — press <kbd>Tab</kbd> while the search input is focused to cycle through the engines listed in `engines`.
+
+```yaml
+- type: search
+  mode: tab
+  engines:
+    - title: Google
+      url: google
+    - title: YouTube
+      url: https://www.youtube.com/results?search_query={QUERY}
+```
+
+##### `engines`
+Only used when `mode: tab`. A list of search engines to cycle through with <kbd>Tab</kbd>, in order. The first one is used by default.
+
+###### Properties for each engine
+| Name | Type | Required |
+| ---- | ---- | -------- |
+| title | string | yes |
+| url | string | yes |
+
+`url` accepts either one of the built-in engine names (`duckduckgo`, `google`, `bing`, `perplexity`, `kagi`, `startpage`) or a full custom URL with `{QUERY}`, same as `search-engine`.
+
+##### `hide-suggestions`
+When set to `true`, disables the bookmark suggestions dropdown for this search widget.
 
 ### Group
 Group multiple widgets into one using tabs. Widgets are defined using a `widgets` property exactly as you would on a page column. The only limitation is that you cannot place a group widget or a split column widget within a group widget.

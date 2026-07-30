@@ -95,6 +95,24 @@ function updateRelativeTimeForElements(elements)
     }
 }
 
+function collectLoadedBookmarks() {
+    const links = document.querySelectorAll("a.bookmarks-link");
+    const bookmarks = [];
+
+    for (let i = 0; i < links.length; i++) {
+        const link = links[i];
+        const iconElement = link.parentElement.querySelector("img.bookmarks-icon");
+
+        bookmarks.push({
+            title: link.textContent.trim(),
+            url: link.href,
+            iconSrc: iconElement != null ? iconElement.src : null,
+        });
+    }
+
+    return bookmarks;
+}
+
 function setupSearchBoxes() {
     const searchWidgets = document.getElementsByClassName("search");
 
@@ -102,17 +120,27 @@ function setupSearchBoxes() {
         return;
     }
 
+    const loadedBookmarks = collectLoadedBookmarks();
+
     for (let i = 0; i < searchWidgets.length; i++) {
         const widget = searchWidgets[i];
+        const mode = widget.dataset.mode || "bangs";
         const defaultSearchUrl = widget.dataset.defaultSearchUrl;
         const target = widget.dataset.target || "_blank";
         const newTab = widget.dataset.newTab === "true";
+        const hideSuggestions = widget.dataset.hideSuggestions === "true" || loadedBookmarks.length == 0;
         const inputElement = widget.getElementsByClassName("search-input")[0];
         const bangElement = widget.getElementsByClassName("search-bang")[0];
         const bangs = widget.querySelectorAll(".search-bangs > input");
         const bangsMap = {};
+        const engines = widget.querySelectorAll(".search-engines > input");
+        const engineTagElement = widget.getElementsByClassName("search-engine-tag")[0];
+        const suggestionsElement = widget.getElementsByClassName("search-suggestions")[0];
         const kbdElement = widget.getElementsByTagName("kbd")[0];
         let currentBang = null;
+        let currentEngineIndex = 0;
+        let currentSuggestions = [];
+        let selectedSuggestionIndex = -1;
         let lastQuery = "";
 
         for (let j = 0; j < bangs.length; j++) {
@@ -120,44 +148,164 @@ function setupSearchBoxes() {
             bangsMap[bang.dataset.shortcut] = bang;
         }
 
+        const setEngineIndex = (index) => {
+            currentEngineIndex = index;
+            if (engineTagElement != null) {
+                engineTagElement.textContent = engines[currentEngineIndex].dataset.title;
+            }
+        };
+
+        if (mode == "tab" && engines.length > 0) {
+            setEngineIndex(0);
+        }
+
+        const renderSuggestions = () => {
+            suggestionsElement.innerHTML = "";
+
+            for (let j = 0; j < currentSuggestions.length; j++) {
+                const bookmark = currentSuggestions[j];
+                const row = elem().classes("search-suggestion");
+
+                if (j == selectedSuggestionIndex) {
+                    row.classList.add("search-suggestion-selected");
+                }
+
+                if (bookmark.iconSrc != null) {
+                    elem("img").classes("search-suggestion-icon").attrs({ src: bookmark.iconSrc, alt: "" }).appendTo(row);
+                }
+
+                elem("span").classes("search-suggestion-title").text(bookmark.title).appendTo(row);
+
+                row.addEventListener("mouseenter", () => {
+                    selectedSuggestionIndex = j;
+                    renderSuggestions();
+                });
+
+                row.addEventListener("mousedown", (event) => {
+                    event.preventDefault();
+                    navigateToBookmark(bookmark);
+                });
+
+                suggestionsElement.appendChild(row);
+            }
+
+            suggestionsElement.classList.toggle("search-suggestions-visible", currentSuggestions.length > 0);
+        };
+
+        const updateSuggestions = (query) => {
+            if (hideSuggestions || query.length == 0) {
+                currentSuggestions = [];
+                selectedSuggestionIndex = -1;
+                renderSuggestions();
+                return;
+            }
+
+            const needle = query.toLowerCase();
+            currentSuggestions = loadedBookmarks
+                .filter((bookmark) => bookmark.title.toLowerCase().includes(needle))
+                .slice(0, 5);
+            selectedSuggestionIndex = -1;
+            renderSuggestions();
+        };
+
+        const closeSuggestions = () => {
+            currentSuggestions = [];
+            selectedSuggestionIndex = -1;
+            renderSuggestions();
+        };
+
+        const navigateToBookmark = (bookmark) => {
+            closeSuggestions();
+            inputElement.value = "";
+            inputElement.blur();
+
+            if (newTab) {
+                openURLInNewTab(bookmark.url);
+            } else {
+                window.location.href = bookmark.url;
+            }
+        };
+
+        const submitSearch = (event) => {
+            const input = inputElement.value.trim();
+            let query;
+            let searchUrlTemplate;
+
+            if (mode == "tab" && engines.length > 0) {
+                query = input;
+                searchUrlTemplate = engines[currentEngineIndex].dataset.url;
+            } else if (currentBang != null) {
+                query = input.slice(currentBang.dataset.shortcut.length + 1);
+                searchUrlTemplate = currentBang.dataset.url;
+            } else {
+                query = input;
+                searchUrlTemplate = defaultSearchUrl;
+            }
+
+            if (query.length == 0 && currentBang == null) {
+                return;
+            }
+
+            const url = searchUrlTemplate.replace("!QUERY!", encodeURIComponent(query));
+
+            if (newTab && !event.ctrlKey || !newTab && event.ctrlKey) {
+                window.open(url, target).focus();
+            } else {
+                window.location.href = url;
+            }
+
+            lastQuery = query;
+            inputElement.value = "";
+            closeSuggestions();
+        };
+
         const handleKeyDown = (event) => {
             if (event.key == "Escape") {
+                closeSuggestions();
                 inputElement.blur();
                 return;
             }
 
-            if (event.key == "Enter") {
-                const input = inputElement.value.trim();
-                let query;
-                let searchUrlTemplate;
-
-                if (currentBang != null) {
-                    query = input.slice(currentBang.dataset.shortcut.length + 1);
-                    searchUrlTemplate = currentBang.dataset.url;
-                } else {
-                    query = input;
-                    searchUrlTemplate = defaultSearchUrl;
-                }
-                if (query.length == 0 && currentBang == null) {
-                    return;
-                }
-
-                const url = searchUrlTemplate.replace("!QUERY!", encodeURIComponent(query));
-
-                if (newTab && !event.ctrlKey || !newTab && event.ctrlKey) {
-                    window.open(url, target).focus();
-                } else {
-                    window.location.href = url;
-                }
-
-                lastQuery = query;
-                inputElement.value = "";
-
+            if (event.key == "Tab" && mode == "tab" && engines.length > 0) {
+                event.preventDefault();
+                setEngineIndex((currentEngineIndex + 1) % engines.length);
                 return;
             }
 
-            if (event.key == "ArrowUp" && lastQuery.length > 0) {
-                inputElement.value = lastQuery;
+            if (event.key == "Enter") {
+                event.preventDefault();
+
+                if (selectedSuggestionIndex >= 0 && currentSuggestions[selectedSuggestionIndex]) {
+                    navigateToBookmark(currentSuggestions[selectedSuggestionIndex]);
+                    return;
+                }
+
+                submitSearch(event);
+                return;
+            }
+
+            if (event.key == "ArrowDown") {
+                if (currentSuggestions.length > 0) {
+                    event.preventDefault();
+                    selectedSuggestionIndex = (selectedSuggestionIndex + 1) % currentSuggestions.length;
+                    renderSuggestions();
+                }
+                return;
+            }
+
+            if (event.key == "ArrowUp") {
+                if (currentSuggestions.length > 0) {
+                    event.preventDefault();
+                    selectedSuggestionIndex = selectedSuggestionIndex <= 0
+                        ? currentSuggestions.length - 1
+                        : selectedSuggestionIndex - 1;
+                    renderSuggestions();
+                    return;
+                }
+
+                if (lastQuery.length > 0) {
+                    inputElement.value = lastQuery;
+                }
                 return;
             }
         };
@@ -169,6 +317,13 @@ function setupSearchBoxes() {
 
         const handleInput = (event) => {
             const value = event.target.value.trim();
+
+            updateSuggestions(value);
+
+            if (mode == "tab") {
+                return;
+            }
+
             if (value in bangsMap) {
                 changeCurrentBang(bangsMap[value]);
                 return;
@@ -190,6 +345,7 @@ function setupSearchBoxes() {
         inputElement.addEventListener("blur", () => {
             document.removeEventListener("keydown", handleKeyDown);
             document.removeEventListener("input", handleInput);
+            closeSuggestions();
         });
 
         document.addEventListener("keydown", (event) => {

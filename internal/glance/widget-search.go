@@ -14,15 +14,23 @@ type SearchBang struct {
 	URL      string
 }
 
+type SearchEngineOption struct {
+	Title string
+	URL   string
+}
+
 type searchWidget struct {
-	widgetBase   `yaml:",inline"`
-	cachedHTML   template.HTML `yaml:"-"`
-	SearchEngine string        `yaml:"search-engine"`
-	Bangs        []SearchBang  `yaml:"bangs"`
-	NewTab       bool          `yaml:"new-tab"`
-	Target       string        `yaml:"target"`
-	Autofocus    bool          `yaml:"autofocus"`
-	Placeholder  string        `yaml:"placeholder"`
+	widgetBase      `yaml:",inline"`
+	cachedHTML      template.HTML        `yaml:"-"`
+	SearchEngine    string               `yaml:"search-engine"`
+	Bangs           []SearchBang         `yaml:"bangs"`
+	Mode            string               `yaml:"mode"`
+	Engines         []SearchEngineOption `yaml:"engines"`
+	HideSuggestions bool                 `yaml:"hide-suggestions"`
+	NewTab          bool                 `yaml:"new-tab"`
+	Target          string               `yaml:"target"`
+	Autofocus       bool                 `yaml:"autofocus"`
+	Placeholder     string               `yaml:"placeholder"`
 }
 
 func convertSearchUrl(url string) string {
@@ -57,6 +65,18 @@ func (widget *searchWidget) initialize() error {
 
 	widget.SearchEngine = convertSearchUrl(widget.SearchEngine)
 
+	if widget.Mode == "" {
+		widget.Mode = "bangs"
+	}
+
+	if widget.Mode != "bangs" && widget.Mode != "tab" {
+		return fmt.Errorf("search widget has invalid mode %q, must be either \"bangs\" or \"tab\"", widget.Mode)
+	}
+
+	if widget.Mode == "tab" && len(widget.Engines) == 0 {
+		return fmt.Errorf("search widget has mode: tab but no engines defined")
+	}
+
 	for i := range widget.Bangs {
 		if widget.Bangs[i].Shortcut == "" {
 			return fmt.Errorf("search bang #%d has no shortcut", i+1)
@@ -67,6 +87,22 @@ func (widget *searchWidget) initialize() error {
 		}
 
 		widget.Bangs[i].URL = convertSearchUrl(widget.Bangs[i].URL)
+	}
+
+	for i := range widget.Engines {
+		if widget.Engines[i].Title == "" {
+			return fmt.Errorf("search engine #%d has no title", i+1)
+		}
+
+		if widget.Engines[i].URL == "" {
+			return fmt.Errorf("search engine #%d has no URL", i+1)
+		}
+
+		if url, ok := searchEngines[widget.Engines[i].URL]; ok {
+			widget.Engines[i].URL = url
+		}
+
+		widget.Engines[i].URL = convertSearchUrl(widget.Engines[i].URL)
 	}
 
 	widget.cachedHTML = widget.renderTemplate(widget, searchWidgetTemplate)

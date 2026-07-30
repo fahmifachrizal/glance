@@ -3,12 +3,20 @@
 {{ define "widget-content-classes" }}widget-content-frameless{{ end }}
 
 {{ define "widget-content" }}
-<div class="search widget-content-frame padding-inline-widget flex gap-15 items-center" data-default-search-url="{{ .SearchEngine }}" data-new-tab="{{ .NewTab }}" data-target="{{ .Target }}">
+<div class="search widget-content-frame padding-inline-widget flex gap-15 items-center" data-mode="{{ .Mode }}" data-default-search-url="{{ .SearchEngine }}" data-new-tab="{{ .NewTab }}" data-target="{{ .Target }}" data-hide-suggestions="{{ .HideSuggestions }}">
     <div class="search-bangs">
         {{ range .Bangs }}
         <input type="hidden" data-shortcut="{{ .Shortcut }}" data-title="{{ .Title }}" data-url="{{ .URL }}">
         {{ end }}
     </div>
+
+    {{ if eq .Mode "tab" }}
+    <div class="search-engines">
+        {{ range .Engines }}
+        <input type="hidden" data-title="{{ .Title }}" data-url="{{ .URL }}">
+        {{ end }}
+    </div>
+    {{ end }}
 
     <div class="search-icon-container">
         <svg class="search-icon" stroke="var(--color-text-subdue)" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5">
@@ -18,7 +26,12 @@
 
     <input class="search-input" type="text" placeholder="{{ .Placeholder }}" autocomplete="off"{{ if .Autofocus }} autofocus{{ end }}>
 
-    <div class="search-bang"></div>
     <kbd class="hide-on-mobile" title="Press [S] to focus the search input">S</kbd>
+    <div class="search-bang"></div>
+    {{ if eq .Mode "tab" }}
+    <div class="search-engine-tag" title="Press Tab to switch search engine"></div>
+    {{ end }}
+
+    <div class="search-suggestions"></div>
 </div>
 {{ end }}
