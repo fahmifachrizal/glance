@@ -269,6 +269,24 @@ func (p *page) updateOutdatedWidgets() {
 	wg.Wait()
 }
 
+func (p *page) hasOutdatedWidgets(now *time.Time) bool {
+	for w := range p.HeadWidgets {
+		if p.HeadWidgets[w].requiresUpdate(now) {
+			return true
+		}
+	}
+
+	for c := range p.Columns {
+		for w := range p.Columns[c].Widgets {
+			if p.Columns[c].Widgets[w].requiresUpdate(now) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 func (a *application) resolveUserDefinedAssetPath(path string) string {
 	if strings.HasPrefix(path, "/assets/") {
 		return a.Config.Server.BaseURL + path
@@ -347,20 +365,46 @@ func (a *application) handlePageContentRequest(w http.ResponseWriter, r *http.Re
 	}
 
 	var err error
+	var stillOutdated bool
 	var responseBytes bytes.Buffer
 
 	func() {
 		page.mu.Lock()
 		defer page.mu.Unlock()
 
-		page.updateOutdatedWidgets()
+		// Only block on the very first request for this page, when there's
+		// nothing cached yet to show. Afterwards, serve whatever's cached
+		// immediately and refresh outdated widgets in the background so
+		// navigating to the page is never held up waiting on a slow widget.
+		if !page.everUpdated {
+			page.updateOutdatedWidgets()
+			page.everUpdated = true
+		}
+
 		err = pageContentTemplate.Execute(&responseBytes, pageData)
+		now := time.Now()
+		stillOutdated = page.hasOutdatedWidgets(&now)
 	}()
 
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(err.Error()))
 		return
+	}
+
+	if stillOutdated {
+		w.Header().Set("X-Page-Refreshing", "true")
+
+		if page.refreshing.CompareAndSwap(false, true) {
+			go func() {
+				defer page.refreshing.Store(false)
+
+				page.mu.Lock()
+				defer page.mu.Unlock()
+
+				page.updateOutdatedWidgets()
+			}()
+		}
 	}
 
 	w.Write(responseBytes.Bytes())

@@ -8,8 +8,9 @@ async function fetchPageContent(pageData) {
     // TODO: add retries
     const response = await fetch(`${pageData.baseURL}/api/pages/${pageData.slug}/content/`);
     const content = await response.text();
+    const refreshing = response.headers.get("X-Page-Refreshing") === "true";
 
-    return content;
+    return { content, refreshing };
 }
 
 function setupCarousels() {
@@ -648,10 +649,19 @@ function setupCollapsibleGrids() {
     }
 }
 
-const contentReadyCallbacks = [];
+let contentReadyCallbacks = [];
 
 function afterContentReady(callback) {
     contentReadyCallbacks.push(callback);
+}
+
+function runContentReadyCallbacks() {
+    const callbacks = contentReadyCallbacks;
+    contentReadyCallbacks = [];
+
+    for (let i = 0; i < callbacks.length; i++) {
+        callbacks[i]();
+    }
 }
 
 const weekDayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -899,35 +909,77 @@ function initThemePicker() {
     })
 }
 
+async function initializeContentBehaviors() {
+    setupPopovers();
+    setupClocks()
+    await setupCalendars();
+    await setupTodos();
+    setupCarousels();
+    setupSearchBoxes();
+    setupCollapsibleLists();
+    setupCollapsibleGrids();
+    setupGroups();
+    setupMasonries();
+    setupDynamicRelativeTime();
+    setupLazyImages();
+}
+
+// A widget's data can be slow to fetch (weather, RSS, etc). Rather than
+// blocking the whole page behind a loading spinner until every widget is
+// fresh, the server responds immediately with whatever is currently cached
+// and flags the response if any widget is still outdated. In that case we
+// schedule a single follow-up fetch to pick up the freshly updated content
+// and patch it in, without disturbing the user if they're mid-interaction
+// (e.g. typing into the search box).
+function scheduleContentRefresh(pageContentElement) {
+    const userIsBusy = () => {
+        const active = document.activeElement;
+        if (active == null || !pageContentElement.contains(active)) return false;
+        if (!['INPUT', 'TEXTAREA'].includes(active.tagName)) return false;
+        return active.value.length > 0;
+    };
+
+    setTimeout(async () => {
+        if (userIsBusy()) {
+            return;
+        }
+
+        const { content, refreshing } = await fetchPageContent(pageData);
+
+        if (content === pageContentElement.innerHTML) {
+            if (refreshing) scheduleContentRefresh(pageContentElement);
+            return;
+        }
+
+        if (userIsBusy()) {
+            return;
+        }
+
+        pageContentElement.innerHTML = content;
+        await initializeContentBehaviors();
+        runContentReadyCallbacks();
+        setupTruncatedElementTitles();
+
+        if (refreshing) scheduleContentRefresh(pageContentElement);
+    }, 3000);
+}
+
 async function setupPage() {
     initThemePicker();
 
     const pageElement = document.getElementById("page");
     const pageContentElement = document.getElementById("page-content");
-    const pageContent = await fetchPageContent(pageData);
+    const { content, refreshing } = await fetchPageContent(pageData);
 
-    pageContentElement.innerHTML = pageContent;
+    pageContentElement.innerHTML = content;
 
     try {
-        setupPopovers();
-        setupClocks()
-        await setupCalendars();
-        await setupTodos();
-        setupCarousels();
-        setupSearchBoxes();
-        setupCollapsibleLists();
-        setupCollapsibleGrids();
-        setupGroups();
-        setupMasonries();
-        setupDynamicRelativeTime();
-        setupLazyImages();
+        await initializeContentBehaviors();
     } finally {
         pageElement.classList.add("content-ready");
         pageElement.setAttribute("aria-busy", "false");
 
-        for (let i = 0; i < contentReadyCallbacks.length; i++) {
-            contentReadyCallbacks[i]();
-        }
+        runContentReadyCallbacks();
 
         setTimeout(() => {
             setupTruncatedElementTitles();
@@ -936,6 +988,10 @@ async function setupPage() {
         setTimeout(() => {
             document.body.classList.add("page-columns-transitioned");
         }, 300);
+
+        if (refreshing) {
+            scheduleContentRefresh(pageContentElement);
+        }
     }
 }
 
