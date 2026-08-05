@@ -176,6 +176,15 @@ body {
     }
 }
 
+.widget-loading-placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 6rem;
+    font-size: 1.6rem;
+    opacity: 0.6;
+}
+
 .loading-icon {
     min-width: 1.5em;
     width: 1.5em;

@@ -8,13 +8,51 @@ async function fetchPageContent(pageData) {
     // TODO: add retries
     const response = await fetch(`${pageData.baseURL}/api/pages/${pageData.slug}/content/`);
     const content = await response.text();
-    const refreshing = response.headers.get("X-Page-Refreshing") === "true";
+    const outdatedWidgetIDs = (response.headers.get("X-Outdated-Widget-IDs") || "")
+        .split(",")
+        .map(id => id.trim())
+        .filter(id => id.length > 0);
 
-    return { content, refreshing };
+    return { content, outdatedWidgetIDs };
 }
 
-function setupCarousels() {
-    const carouselElements = document.getElementsByClassName("carousel-container");
+// Widgets that need to fetch their own data (weather, RSS, etc.) can be slow.
+// Rather than block the whole page behind a loading spinner until every
+// widget is ready, the server renders the page immediately with whatever's
+// cached (or a loading placeholder), and tells us via `outdatedWidgetIDs`
+// which specific widgets still need to be fetched. We then fetch and patch
+// in just those widgets, independently of each other and of the rest of the
+// page - so a slow widget only ever delays itself, never the search bar or
+// any other widget.
+async function fetchAndPatchWidget(pageData, widgetID) {
+    const target = document.querySelector(`[data-widget-id="${widgetID}"]`);
+    if (target == null) {
+        return;
+    }
+
+    const response = await fetch(`${pageData.baseURL}/api/pages/${pageData.slug}/widgets/${widgetID}/content/`);
+    if (response.status !== 200) {
+        return;
+    }
+
+    const html = await response.text();
+    const replacement = elem("div").html(html).firstElementChild;
+    if (replacement == null) {
+        return;
+    }
+
+    target.replaceWith(replacement);
+    initializeWidgetElement(replacement);
+}
+
+function refreshOutdatedWidgets(pageData, widgetIDs) {
+    for (let i = 0; i < widgetIDs.length; i++) {
+        fetchAndPatchWidget(pageData, widgetIDs[i]);
+    }
+}
+
+function setupCarousels(root = document) {
+    const carouselElements = root.getElementsByClassName("carousel-container");
 
     if (carouselElements.length == 0) {
         return;
@@ -339,15 +377,27 @@ function setupSearchBoxes() {
             changeCurrentBang(null);
         };
 
-        inputElement.addEventListener("focus", () => {
+        const attachActiveListeners = () => {
             document.addEventListener("keydown", handleKeyDown);
             document.addEventListener("input", handleInput);
-        });
-        inputElement.addEventListener("blur", () => {
+        };
+        const detachActiveListeners = () => {
             document.removeEventListener("keydown", handleKeyDown);
             document.removeEventListener("input", handleInput);
             closeSuggestions();
-        });
+        };
+
+        inputElement.addEventListener("focus", attachActiveListeners);
+        inputElement.addEventListener("blur", detachActiveListeners);
+
+        // If the input has the `autofocus` attribute, the browser focuses it
+        // the moment it's inserted into the DOM, which can happen before this
+        // point (e.g. there are several `await`s between the content being
+        // inserted and this code running) - meaning the "focus" event above
+        // has already fired and been missed. Catch that case explicitly.
+        if (document.activeElement === inputElement) {
+            attachActiveListeners();
+        }
 
         document.addEventListener("keydown", (event) => {
             if (['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
@@ -364,14 +414,16 @@ function setupSearchBoxes() {
 }
 
 function setupDynamicRelativeTime() {
-    const elements = document.querySelectorAll("[data-dynamic-relative-time]");
     const updateInterval = 60 * 1000;
     let lastUpdateTime = Date.now();
 
-    updateRelativeTimeForElements(elements);
+    // Queried fresh on every tick (rather than once up-front) so that
+    // elements patched in later, after a per-widget refresh, are picked up
+    // too without needing to re-run this whole setup function again.
+    updateRelativeTimeForElements(document.querySelectorAll("[data-dynamic-relative-time]"));
 
     const updateElementsAndTimestamp = () => {
-        updateRelativeTimeForElements(elements);
+        updateRelativeTimeForElements(document.querySelectorAll("[data-dynamic-relative-time]"));
         lastUpdateTime = Date.now();
     };
 
@@ -405,8 +457,8 @@ function setupDynamicRelativeTime() {
     });
 }
 
-function setupGroups() {
-    const groups = document.getElementsByClassName("widget-type-group");
+function setupGroups(root = document) {
+    const groups = root.getElementsByClassName("widget-type-group");
 
     if (groups.length == 0) {
         return;
@@ -465,8 +517,8 @@ function setupGroups() {
     }
 }
 
-function setupLazyImages() {
-    const images = document.querySelectorAll("img[loading=lazy]");
+function setupLazyImages(root = document) {
+    const images = root.querySelectorAll("img[loading=lazy]");
 
     if (images.length == 0) {
         return;
@@ -540,8 +592,8 @@ function attachExpandToggleButton(collapsibleContainer) {
 };
 
 
-function setupCollapsibleLists() {
-    const collapsibleLists = document.querySelectorAll(".list.collapsible-container");
+function setupCollapsibleLists(root = document) {
+    const collapsibleLists = root.querySelectorAll(".list.collapsible-container");
 
     if (collapsibleLists.length == 0) {
         return;
@@ -574,8 +626,8 @@ function setupCollapsibleLists() {
     }
 }
 
-function setupCollapsibleGrids() {
-    const collapsibleGridElements = document.querySelectorAll(".cards-grid.collapsible-container");
+function setupCollapsibleGrids(root = document) {
+    const collapsibleGridElements = root.querySelectorAll(".cards-grid.collapsible-container");
 
     if (collapsibleGridElements.length == 0) {
         return;
@@ -819,8 +871,8 @@ async function setupTodos() {
     }
 }
 
-function setupTruncatedElementTitles() {
-    const elements = document.querySelectorAll(".text-truncate, .single-line-titles .title, .text-truncate-2-lines, .text-truncate-3-lines");
+function setupTruncatedElementTitles(root = document) {
+    const elements = root.querySelectorAll(".text-truncate, .single-line-titles .title, .text-truncate-2-lines, .text-truncate-3-lines");
 
     if (elements.length == 0) {
         return;
@@ -909,59 +961,40 @@ function initThemePicker() {
     })
 }
 
-async function initializeContentBehaviors() {
+function initializeContentBehaviors() {
+    setupSearchBoxes();
     setupPopovers();
     setupClocks()
-    await setupCalendars();
-    await setupTodos();
     setupCarousels();
-    setupSearchBoxes();
     setupCollapsibleLists();
     setupCollapsibleGrids();
     setupGroups();
     setupMasonries();
     setupDynamicRelativeTime();
     setupLazyImages();
+
+    // These do their own dynamic import() plus client-side rendering
+    // (calendar/to-do widgets). Don't await them here - the page (and
+    // especially the search bar) shouldn't wait on that round trip to
+    // become interactive; they'll populate themselves whenever ready.
+    setupCalendars().catch(console.error);
+    setupTodos().catch(console.error);
 }
 
-// A widget's data can be slow to fetch (weather, RSS, etc). Rather than
-// blocking the whole page behind a loading spinner until every widget is
-// fresh, the server responds immediately with whatever is currently cached
-// and flags the response if any widget is still outdated. In that case we
-// schedule a single follow-up fetch to pick up the freshly updated content
-// and patch it in, without disturbing the user if they're mid-interaction
-// (e.g. typing into the search box).
-function scheduleContentRefresh(pageContentElement) {
-    const userIsBusy = () => {
-        const active = document.activeElement;
-        if (active == null || !pageContentElement.contains(active)) return false;
-        if (!['INPUT', 'TEXTAREA'].includes(active.tagName)) return false;
-        return active.value.length > 0;
-    };
-
-    setTimeout(async () => {
-        if (userIsBusy()) {
-            return;
-        }
-
-        const { content, refreshing } = await fetchPageContent(pageData);
-
-        if (content === pageContentElement.innerHTML) {
-            if (refreshing) scheduleContentRefresh(pageContentElement);
-            return;
-        }
-
-        if (userIsBusy()) {
-            return;
-        }
-
-        pageContentElement.innerHTML = content;
-        await initializeContentBehaviors();
-        runContentReadyCallbacks();
-        setupTruncatedElementTitles();
-
-        if (refreshing) scheduleContentRefresh(pageContentElement);
-    }, 3000);
+// Wires up behavior for a single widget element that was just patched in by
+// fetchAndPatchWidget, scoped to that element only so it doesn't touch (or
+// double-initialize) anything else on the page - most importantly, the
+// search bar, which never goes through this path at all.
+function initializeWidgetElement(root) {
+    setupPopovers(root);
+    setupCarousels(root);
+    setupCollapsibleLists(root);
+    setupCollapsibleGrids(root);
+    setupGroups(root);
+    setupMasonries(root);
+    setupLazyImages(root);
+    setupTruncatedElementTitles(root);
+    updateRelativeTimeForElements(root.querySelectorAll("[data-dynamic-relative-time]"));
 }
 
 async function setupPage() {
@@ -969,12 +1002,12 @@ async function setupPage() {
 
     const pageElement = document.getElementById("page");
     const pageContentElement = document.getElementById("page-content");
-    const { content, refreshing } = await fetchPageContent(pageData);
+    const { content, outdatedWidgetIDs } = await fetchPageContent(pageData);
 
     pageContentElement.innerHTML = content;
 
     try {
-        await initializeContentBehaviors();
+        initializeContentBehaviors();
     } finally {
         pageElement.classList.add("content-ready");
         pageElement.setAttribute("aria-busy", "false");
@@ -989,9 +1022,7 @@ async function setupPage() {
             document.body.classList.add("page-columns-transitioned");
         }, 300);
 
-        if (refreshing) {
-            scheduleContentRefresh(pageContentElement);
-        }
+        refreshOutdatedWidgets(pageData, outdatedWidgetIDs);
     }
 }
 

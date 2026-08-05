@@ -2,9 +2,9 @@ package glance
 
 import (
 	"bytes"
-	"context"
 	"encoding/base64"
 	"fmt"
+	"html/template"
 	"log"
 	"net/http"
 	"path/filepath"
@@ -230,61 +230,46 @@ func newApplication(c *config) (*application, error) {
 	return app, nil
 }
 
-func (p *page) updateOutdatedWidgets() {
-	now := time.Now()
+// outdatedWidgetIDs returns the IDs of top-level widgets (head widgets and
+// column widgets - container widgets like group/split-column count as one
+// unit here) that are due for a refresh. The client uses this to fetch and
+// patch in just those widgets individually, rather than the whole page.
+func (p *page) outdatedWidgetIDs(now *time.Time) []uint64 {
+	var ids []uint64
 
-	var wg sync.WaitGroup
-	context := context.Background()
-
-	for w := range p.HeadWidgets {
-		widget := p.HeadWidgets[w]
-
-		if !widget.requiresUpdate(&now) {
-			continue
-		}
-
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			widget.update(context)
-		}()
-	}
-
-	for c := range p.Columns {
-		for w := range p.Columns[c].Widgets {
-			widget := p.Columns[c].Widgets[w]
-
-			if !widget.requiresUpdate(&now) {
-				continue
-			}
-
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				widget.update(context)
-			}()
-		}
-	}
-
-	wg.Wait()
-}
-
-func (p *page) hasOutdatedWidgets(now *time.Time) bool {
 	for w := range p.HeadWidgets {
 		if p.HeadWidgets[w].requiresUpdate(now) {
-			return true
+			ids = append(ids, p.HeadWidgets[w].GetID())
 		}
 	}
 
 	for c := range p.Columns {
 		for w := range p.Columns[c].Widgets {
 			if p.Columns[c].Widgets[w].requiresUpdate(now) {
-				return true
+				ids = append(ids, p.Columns[c].Widgets[w].GetID())
 			}
 		}
 	}
 
-	return false
+	return ids
+}
+
+func (p *page) findWidgetByID(id uint64) widget {
+	for w := range p.HeadWidgets {
+		if p.HeadWidgets[w].GetID() == id {
+			return p.HeadWidgets[w]
+		}
+	}
+
+	for c := range p.Columns {
+		for w := range p.Columns[c].Widgets {
+			if p.Columns[c].Widgets[w].GetID() == id {
+				return p.Columns[c].Widgets[w]
+			}
+		}
+	}
+
+	return nil
 }
 
 func (a *application) resolveUserDefinedAssetPath(path string) string {
@@ -365,25 +350,22 @@ func (a *application) handlePageContentRequest(w http.ResponseWriter, r *http.Re
 	}
 
 	var err error
-	var stillOutdated bool
+	var outdatedIDs []uint64
 	var responseBytes bytes.Buffer
 
 	func() {
 		page.mu.Lock()
 		defer page.mu.Unlock()
 
-		// Only block on the very first request for this page, when there's
-		// nothing cached yet to show. Afterwards, serve whatever's cached
-		// immediately and refresh outdated widgets in the background so
-		// navigating to the page is never held up waiting on a slow widget.
-		if !page.everUpdated {
-			page.updateOutdatedWidgets()
-			page.everUpdated = true
-		}
-
+		// Never block here waiting on widgets to fetch their data - render
+		// immediately with whatever's cached (or a loading placeholder for
+		// widgets that haven't loaded yet at all). The client fetches and
+		// patches in each outdated widget individually and independently,
+		// so a slow widget never holds up the rest of the page.
 		err = pageContentTemplate.Execute(&responseBytes, pageData)
+
 		now := time.Now()
-		stillOutdated = page.hasOutdatedWidgets(&now)
+		outdatedIDs = page.outdatedWidgetIDs(&now)
 	}()
 
 	if err != nil {
@@ -392,22 +374,63 @@ func (a *application) handlePageContentRequest(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	if stillOutdated {
-		w.Header().Set("X-Page-Refreshing", "true")
-
-		if page.refreshing.CompareAndSwap(false, true) {
-			go func() {
-				defer page.refreshing.Store(false)
-
-				page.mu.Lock()
-				defer page.mu.Unlock()
-
-				page.updateOutdatedWidgets()
-			}()
+	if len(outdatedIDs) > 0 {
+		idsAsStrings := make([]string, len(outdatedIDs))
+		for i, id := range outdatedIDs {
+			idsAsStrings[i] = strconv.FormatUint(id, 10)
 		}
+
+		w.Header().Set("X-Outdated-Widget-IDs", strings.Join(idsAsStrings, ","))
 	}
 
 	w.Write(responseBytes.Bytes())
+}
+
+func (a *application) handleWidgetContentRequest(w http.ResponseWriter, r *http.Request) {
+	page, exists := a.slugToPage[r.PathValue("page")]
+	if !exists {
+		a.handleNotFound(w, r)
+		return
+	}
+
+	if a.handleUnauthorizedResponse(w, r, showUnauthorizedJSON) {
+		return
+	}
+
+	widgetID, err := strconv.ParseUint(r.PathValue("widget"), 10, 64)
+	if err != nil {
+		a.handleNotFound(w, r)
+		return
+	}
+
+	var html template.HTML
+	var found bool
+
+	func() {
+		page.mu.Lock()
+		defer page.mu.Unlock()
+
+		target := page.findWidgetByID(widgetID)
+		if target == nil {
+			return
+		}
+
+		found = true
+
+		now := time.Now()
+		if target.requiresUpdate(&now) {
+			target.update(r.Context())
+		}
+
+		html = target.Render()
+	}()
+
+	if !found {
+		a.handleNotFound(w, r)
+		return
+	}
+
+	w.Write([]byte(html))
 }
 
 func (a *application) addressOfRequest(r *http.Request) string {
@@ -484,6 +507,7 @@ func (a *application) server() (func() error, func() error) {
 	mux.HandleFunc("GET /{page}", a.handlePageRequest)
 
 	mux.HandleFunc("GET /api/pages/{page}/content/{$}", a.handlePageContentRequest)
+	mux.HandleFunc("GET /api/pages/{page}/widgets/{widget}/content/{$}", a.handleWidgetContentRequest)
 
 	if !a.Config.Theme.DisablePicker {
 		mux.HandleFunc("POST /api/set-theme/{key}", a.handleThemeChangeRequest)

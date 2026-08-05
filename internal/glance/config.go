@@ -13,7 +13,6 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -88,10 +87,8 @@ type page struct {
 		Size    string  `yaml:"size"`
 		Widgets widgets `yaml:"widgets"`
 	} `yaml:"columns"`
-	PrimaryColumnIndex int8        `yaml:"-"`
-	mu                 sync.Mutex  `yaml:"-"`
-	everUpdated        bool        `yaml:"-"`
-	refreshing         atomic.Bool `yaml:"-"`
+	PrimaryColumnIndex int8       `yaml:"-"`
+	mu                 sync.Mutex `yaml:"-"`
 }
 
 func newConfigFromYAML(contents []byte) (*config, error) {
