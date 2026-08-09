@@ -17,9 +17,9 @@
     --cm: 1;
     --tsm: 1;
 
-    --widget-gap: 23px;
+    --widget-gap: 15px;
     --widget-content-vertical-padding: 15px;
-    --widget-content-horizontal-padding: 17px;
+    --widget-content-horizontal-padding: 15px;
     --widget-content-padding: var(--widget-content-vertical-padding) var(--widget-content-horizontal-padding);
     --content-bounds-padding: 15px;
     --border-radius: 5px;
