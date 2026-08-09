@@ -93,6 +93,7 @@
     color: var(--color-text-subdue);
     cursor: default;
     user-select: none;
+    --webkit-user-select: none;
 }
 
 .search-engine-tag:empty {
