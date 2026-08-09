@@ -134,6 +134,18 @@ function updateRelativeTimeForElements(elements)
     }
 }
 
+// Matches "example.com", "sub.example.co.uk/path?x=1" and "https://example.com",
+// but not plain words or multi-word queries.
+const urlLikePattern = /^https?:\/\/\S+$|^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9-]+)+([\/?#]\S*)?$/i;
+
+function isLikelyURL(value) {
+    if (value.length == 0 || value.includes(" ")) {
+        return false;
+    }
+
+    return urlLikePattern.test(value);
+}
+
 function collectLoadedBookmarks() {
     const links = document.querySelectorAll("a.bookmarks-link");
     const bookmarks = [];
@@ -243,7 +255,9 @@ function setupSearchBoxes() {
             currentSuggestions = loadedBookmarks
                 .filter((bookmark) => bookmark.title.toLowerCase().includes(needle))
                 .slice(0, 5);
-            selectedSuggestionIndex = -1;
+            // Auto-select the top match so pressing Enter opens it directly,
+            // without requiring the user to arrow down to it first.
+            selectedSuggestionIndex = currentSuggestions.length > 0 ? 0 : -1;
             renderSuggestions();
         };
 
@@ -265,8 +279,27 @@ function setupSearchBoxes() {
             }
         };
 
+        const openResult = (url, event) => {
+            if (newTab && !event.ctrlKey || !newTab && event.ctrlKey) {
+                window.open(url, target).focus();
+            } else {
+                window.location.href = url;
+            }
+        };
+
         const submitSearch = (event) => {
             const input = inputElement.value.trim();
+
+            if (input.length > 0 && currentBang == null && isLikelyURL(input)) {
+                const url = /^https?:\/\//i.test(input) ? input : `https://${input}`;
+                openResult(url, event);
+
+                lastQuery = input;
+                inputElement.value = "";
+                closeSuggestions();
+                return;
+            }
+
             let query;
             let searchUrlTemplate;
 
@@ -286,12 +319,7 @@ function setupSearchBoxes() {
             }
 
             const url = searchUrlTemplate.replace("!QUERY!", encodeURIComponent(query));
-
-            if (newTab && !event.ctrlKey || !newTab && event.ctrlKey) {
-                window.open(url, target).focus();
-            } else {
-                window.location.href = url;
-            }
+            openResult(url, event);
 
             lastQuery = query;
             inputElement.value = "";
@@ -354,12 +382,17 @@ function setupSearchBoxes() {
             bangElement.textContent = bang != null ? bang.dataset.title : "";
         }
 
+        const updateURLHint = (value) => {
+            bangElement.textContent = isLikelyURL(value) ? "Go to site ↵" : "";
+        };
+
         const handleInput = (event) => {
             const value = event.target.value.trim();
 
             updateSuggestions(value);
 
             if (mode == "tab") {
+                updateURLHint(value);
                 return;
             }
 
@@ -375,6 +408,7 @@ function setupSearchBoxes() {
             }
 
             changeCurrentBang(null);
+            updateURLHint(value);
         };
 
         const attachActiveListeners = () => {
@@ -849,8 +883,8 @@ function setupClocks() {
     updateClocks();
 }
 
-async function setupCalendars() {
-    const elems = document.getElementsByClassName("calendar");
+async function setupCalendars(root = document) {
+    const elems = root.getElementsByClassName("calendar");
     if (elems.length == 0) return;
 
     // TODO: implement prefetching, currently loads as a nasty waterfall of requests
@@ -860,8 +894,8 @@ async function setupCalendars() {
         calendar.default(elems[i]);
 }
 
-async function setupTodos() {
-    const elems = Array.from(document.getElementsByClassName("todo"));
+async function setupTodos(root = document) {
+    const elems = Array.from(root.getElementsByClassName("todo"));
     if (elems.length == 0) return;
 
     const todo = await import ('./todo.js');
@@ -995,6 +1029,12 @@ function initializeWidgetElement(root) {
     setupLazyImages(root);
     setupTruncatedElementTitles(root);
     updateRelativeTimeForElements(root.querySelectorAll("[data-dynamic-relative-time]"));
+
+    // A patched calendar/to-do widget comes back from the server as the raw
+    // placeholder markup - it needs to go through the same client-side
+    // upgrade as on initial load to become the interactive widget again.
+    setupCalendars(root).catch(console.error);
+    setupTodos(root).catch(console.error);
 }
 
 async function setupPage() {

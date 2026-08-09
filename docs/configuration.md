@@ -2769,9 +2769,24 @@ Preview:
 | Name | Type | Required | Default |
 | ---- | ---- | -------- | ------- |
 | first-day-of-week | string | no | monday |
+| holiday-calendar | string | no | |
 
 ##### `first-day-of-week`
 The day of the week that the calendar starts on. All week days are available as possible values.
+
+##### `holiday-calendar`
+When set, marks public holidays on the calendar with a small dot - hover over a marked date to see the holiday's name. Refreshed once a day.
+
+Takes the ID of one of [Google's public holiday calendars](https://calendar.google.com/calendar/u/0/r/settings/addcalendar) - the same ID you'd use to subscribe to it in Google/Apple/Outlook Calendar, e.g. `en.indonesian#holiday@group.v.calendar.google.com` for Indonesia or `en.usa#holiday@group.v.calendar.google.com` for the US. You can also pass a full `http(s)://` URL to any other public ICS calendar feed.
+
+```yaml
+- type: calendar
+  holiday-calendar: en.indonesian#holiday@group.v.calendar.google.com
+```
+
+> [!IMPORTANT]
+>
+> In YAML a value starting with `#` is treated as a comment. Since this ID contains a `#` partway through it's fine unquoted, but if you ever need one starting with `#` wrap it in quotes.
 
 ### Calendar (legacy)
 Display a calendar.

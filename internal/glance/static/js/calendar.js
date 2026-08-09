@@ -1,5 +1,6 @@
 import { directions, easeOutQuint, slideFade } from "./animations.js";
 import { elem, repeat, text } from "./templating.js";
+import { setupPopovers } from "./popover.js";
 
 const FULL_MONTH_SLOTS = 7*6;
 const WEEKDAY_ABBRS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
@@ -30,13 +31,28 @@ const [datesEntranceLeft, datesEntranceRight] = directions(
 const undoEntrance = slideFade({ direction: "left", distance: "100%", duration: 300 });
 
 export default function(element) {
-    element.swapWith(Calendar(
-        Number(element.dataset.firstDayOfWeek ?? 1)
+    let holidays = {};
+
+    try {
+        holidays = JSON.parse(element.dataset.holidays || "{}");
+    } catch (e) {
+        console.error("Failed to parse calendar holidays", e);
+    }
+
+    const calendar = element.swapWith(Calendar(
+        Number(element.dataset.firstDayOfWeek ?? 1),
+        holidays
     ));
+
+    // Date cells get `data-popover-type` unconditionally at creation (see
+    // Dates() below) so this only needs to run once - navigating between
+    // months just toggles `data-popover-text` on the same, already-wired-up
+    // cells rather than recreating them.
+    setupPopovers(calendar);
 }
 
 // TODO: when viewing the previous/next month, display the current date if it's within the spill-over days
-function Calendar(firstDay) {
+function Calendar(firstDay, holidays) {
     let header, dates;
     let advanceTimeTicker;
     let now = new Date();
@@ -63,7 +79,7 @@ function Calendar(firstDay) {
 
     const calendar = elem().classes("calendar").append(
         header = Header(nextClicked, prevClicked, undoClicked),
-        dates = Dates(firstDay)
+        dates = Dates(firstDay, holidays)
     );
 
     update(now);
@@ -127,8 +143,16 @@ function Header(nextClicked, prevClicked, undoClicked) {
     });
 }
 
-function Dates(firstDay) {
+function Dates(firstDay, holidays) {
     let dates, lastRenderedDate;
+
+    const applyHoliday = (child, year, month, day) => {
+        const name = holidays[dateKey(year, month, day)];
+
+        if (name) {
+            child.classes("calendar-holiday-date").attr("data-popover-text", name);
+        }
+    };
 
     const updateFullMonth = function(now, newDate) {
         const firstWeekday = new Date(newDate.getFullYear(), newDate.getMonth(), 1).getDay();
@@ -138,28 +162,36 @@ function Dates(firstDay) {
         const previousMonthDays = daysInMonth(newDate.getFullYear(), newDate.getMonth() - 1)
         const isCurrentMonth = datesWithinSameMonth(now, newDate);
         const currentDate = now.getDate();
+        // Using Date normalization here (rather than raw month +/- 1) so
+        // December <-> January year rollovers resolve to the correct year.
+        const previousMonthDate = new Date(newDate.getFullYear(), newDate.getMonth() - 1, 1);
+        const nextMonthDate = new Date(newDate.getFullYear(), newDate.getMonth() + 1, 1);
 
         let children = dates.children;
         let index = 0;
 
         for (let i = 0; i < FULL_MONTH_SLOTS; i++) {
-            children[i].clearClasses("calendar-spillover-date", "calendar-current-date");
+            children[i].clearClasses("calendar-spillover-date", "calendar-current-date", "calendar-holiday-date");
+            children[i].removeAttribute("data-popover-text");
         }
 
         for (let i = 0; i < previousMonthSpilloverDays; i++, index++) {
-            children[index].classes("calendar-spillover-date").text(
-                previousMonthDays - previousMonthSpilloverDays + i + 1
-            )
+            const day = previousMonthDays - previousMonthSpilloverDays + i + 1;
+            children[index].classes("calendar-spillover-date").text(day);
+            applyHoliday(children[index], previousMonthDate.getFullYear(), previousMonthDate.getMonth(), day);
         }
 
         for (let i = 1; i <= currentMonthDays; i++, index++) {
             children[index]
                 .classesIf(isCurrentMonth && i === currentDate, "calendar-current-date")
                 .text(i);
+            applyHoliday(children[index], newDate.getFullYear(), newDate.getMonth(), i);
         }
 
         for (let i = 0; i < nextMonthSpilloverDays; i++, index++) {
-            children[index].classes("calendar-spillover-date").text(i + 1);
+            const day = i + 1;
+            children[index].classes("calendar-spillover-date").text(day);
+            applyHoliday(children[index], nextMonthDate.getFullYear(), nextMonthDate.getMonth(), day);
         }
 
         lastRenderedDate = newDate;
@@ -187,7 +219,7 @@ function Dates(firstDay) {
         ),
 
         dates = elem().classes("calendar-dates", "margin-top-3").append(
-            ...elem().classes("calendar-date").duplicate(FULL_MONTH_SLOTS)
+            ...elem().classes("calendar-date").attr("data-popover-type", "text").duplicate(FULL_MONTH_SLOTS)
         )
     ).component({ update });
 }
@@ -198,6 +230,10 @@ function datesWithinSameMonth(d1, d2) {
 
 function daysInMonth(year, month) {
     return new Date(year, month + 1, 0).getDate();
+}
+
+function dateKey(year, month, day) {
+    return `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
 function msTillNextDay(now) {
