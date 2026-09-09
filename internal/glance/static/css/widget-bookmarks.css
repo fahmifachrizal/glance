@@ -12,7 +12,13 @@
     display: inline-block;
     position: relative;
     top: 0.15em;
+    color: var(--color-text-highlight);
+    transition: transform 0.2s ease, color 0.2s ease;
+}
+
+.bookmarks-link:not(.bookmarks-link-no-arrow):hover::after {
     color: var(--bookmarks-group-color);
+    transform: translate(2px, -2px);
 }
 
 .bookmarks-icon-container {
