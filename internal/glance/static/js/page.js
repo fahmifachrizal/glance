@@ -164,6 +164,11 @@ function collectLoadedBookmarks() {
     return bookmarks;
 }
 
+async function openJSONTools() {
+    const jsonTools = await import ('./json-tools.js');
+    jsonTools.default();
+}
+
 function setupSearchBoxes() {
     const searchWidgets = document.getElementsByClassName("search");
 
@@ -289,6 +294,14 @@ function setupSearchBoxes() {
 
         const submitSearch = (event) => {
             const input = inputElement.value.trim();
+
+            if (currentBang == null && input.toLowerCase() == "json") {
+                inputElement.value = "";
+                closeSuggestions();
+                inputElement.blur();
+                openJSONTools();
+                return;
+            }
 
             if (input.length > 0 && currentBang == null && isLikelyURL(input)) {
                 const url = /^https?:\/\//i.test(input) ? input : `https://${input}`;
@@ -435,6 +448,7 @@ function setupSearchBoxes() {
 
         document.addEventListener("keydown", (event) => {
             if (['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
+            if (document.body.classList.contains("json-tools-open")) return;
             if (event.code != "KeyS") return;
 
             inputElement.focus();
