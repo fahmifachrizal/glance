@@ -2,6 +2,7 @@ import { setupPopovers } from './popover.js';
 import { setupMasonries } from './masonry.js';
 import { throttledDebounce, isElementVisible, openURLInNewTab } from './utils.js';
 import { elem, find, findAll } from './templating.js';
+import { findTools } from './dev-tools-list.js';
 
 async function fetchPageContent(pageData) {
     // TODO: handle non 200 status codes/time outs
@@ -164,9 +165,24 @@ function collectLoadedBookmarks() {
     return bookmarks;
 }
 
-async function openJSONTools() {
-    const jsonTools = await import ('./json-tools.js');
-    jsonTools.default();
+// Lazy-loaded so the tools are only fetched the first time they're opened.
+async function openDevTools(toolID) {
+    const devTools = await import ('./dev-tools.js');
+    devTools.default(toolID);
+}
+
+function setupDevToolsShortcut() {
+    document.addEventListener("keydown", (event) => {
+        if (event.code != "KeyT" || event.repeat) return;
+        if (event.ctrlKey || event.metaKey || event.altKey) return;
+
+        const active = document.activeElement;
+        if (active != null && (['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName) || active.isContentEditable)) return;
+        if (document.body.classList.contains("dev-tools-open")) return;
+
+        event.preventDefault();
+        openDevTools();
+    });
 }
 
 function setupSearchBoxes() {
@@ -184,7 +200,7 @@ function setupSearchBoxes() {
         const defaultSearchUrl = widget.dataset.defaultSearchUrl;
         const target = widget.dataset.target || "_blank";
         const newTab = widget.dataset.newTab === "true";
-        const hideSuggestions = widget.dataset.hideSuggestions === "true" || loadedBookmarks.length == 0;
+        const hideSuggestions = widget.dataset.hideSuggestions === "true";
         const inputElement = widget.getElementsByClassName("search-input")[0];
         const bangElement = widget.getElementsByClassName("search-bang")[0];
         const bangs = widget.querySelectorAll(".search-bangs > input");
@@ -219,18 +235,22 @@ function setupSearchBoxes() {
             suggestionsElement.innerHTML = "";
 
             for (let j = 0; j < currentSuggestions.length; j++) {
-                const bookmark = currentSuggestions[j];
+                const suggestion = currentSuggestions[j];
                 const row = elem().classes("search-suggestion");
 
                 if (j == selectedSuggestionIndex) {
                     row.classList.add("search-suggestion-selected");
                 }
 
-                if (bookmark.iconSrc != null) {
-                    elem("img").classes("search-suggestion-icon").attrs({ src: bookmark.iconSrc, alt: "" }).appendTo(row);
+                if (suggestion.iconSrc != null) {
+                    elem("img").classes("search-suggestion-icon").attrs({ src: suggestion.iconSrc, alt: "" }).appendTo(row);
                 }
 
-                elem("span").classes("search-suggestion-title").text(bookmark.title).appendTo(row);
+                elem("span").classes("search-suggestion-title").text(suggestion.title).appendTo(row);
+
+                if (suggestion.toolID != null) {
+                    elem("span").classes("search-suggestion-tag").text("Tool").appendTo(row);
+                }
 
                 row.addEventListener("mouseenter", () => {
                     selectedSuggestionIndex = j;
@@ -239,7 +259,7 @@ function setupSearchBoxes() {
 
                 row.addEventListener("mousedown", (event) => {
                     event.preventDefault();
-                    navigateToBookmark(bookmark);
+                    activateSuggestion(suggestion);
                 });
 
                 suggestionsElement.appendChild(row);
@@ -257,12 +277,26 @@ function setupSearchBoxes() {
             }
 
             const needle = query.toLowerCase();
-            currentSuggestions = loadedBookmarks
+            const toTool = (tool, exact) => ({ title: tool.label, toolID: tool.id, exact });
+            const tools = findTools(query);
+            const matchingBookmarks = loadedBookmarks
                 .filter((bookmark) => bookmark.title.toLowerCase().includes(needle))
                 .slice(0, 5);
+
+            // A tool whose name was typed in full comes first, so Enter opens it;
+            // tools the query merely starts are offered after the bookmarks.
+            currentSuggestions = [
+                ...tools.exact.map((tool) => toTool(tool, true)),
+                ...matchingBookmarks,
+                ...tools.partial.slice(0, 4).map((tool) => toTool(tool, false)),
+            ].slice(0, 8);
+
             // Auto-select the top match so pressing Enter opens it directly,
-            // without requiring the user to arrow down to it first.
-            selectedSuggestionIndex = currentSuggestions.length > 0 ? 0 : -1;
+            // without requiring the user to arrow down to it first. A loose tool
+            // match is only offered, never selected, so that an ordinary web
+            // search is not hijacked.
+            const top = currentSuggestions[0];
+            selectedSuggestionIndex = top != null && (top.toolID == null || top.exact) ? 0 : -1;
             renderSuggestions();
         };
 
@@ -284,6 +318,21 @@ function setupSearchBoxes() {
             }
         };
 
+        const openTool = (toolID) => {
+            closeSuggestions();
+            inputElement.value = "";
+            inputElement.blur();
+            openDevTools(toolID);
+        };
+
+        const activateSuggestion = (suggestion) => {
+            if (suggestion.toolID != null) {
+                openTool(suggestion.toolID);
+            } else {
+                navigateToBookmark(suggestion);
+            }
+        };
+
         const openResult = (url, event) => {
             if (newTab && !event.ctrlKey || !newTab && event.ctrlKey) {
                 window.open(url, target).focus();
@@ -295,12 +344,13 @@ function setupSearchBoxes() {
         const submitSearch = (event) => {
             const input = inputElement.value.trim();
 
-            if (currentBang == null && input.toLowerCase() == "json") {
-                inputElement.value = "";
-                closeSuggestions();
-                inputElement.blur();
-                openJSONTools();
-                return;
+            if (currentBang == null) {
+                const tool = findTools(input).exact[0];
+
+                if (tool !== undefined) {
+                    openTool(tool.id);
+                    return;
+                }
             }
 
             if (input.length > 0 && currentBang == null && isLikelyURL(input)) {
@@ -356,7 +406,7 @@ function setupSearchBoxes() {
                 event.preventDefault();
 
                 if (selectedSuggestionIndex >= 0 && currentSuggestions[selectedSuggestionIndex]) {
-                    navigateToBookmark(currentSuggestions[selectedSuggestionIndex]);
+                    activateSuggestion(currentSuggestions[selectedSuggestionIndex]);
                     return;
                 }
 
@@ -448,7 +498,7 @@ function setupSearchBoxes() {
 
         document.addEventListener("keydown", (event) => {
             if (['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
-            if (document.body.classList.contains("json-tools-open")) return;
+            if (document.body.classList.contains("dev-tools-open")) return;
             if (event.code != "KeyS") return;
 
             inputElement.focus();
@@ -1011,6 +1061,7 @@ function initThemePicker() {
 
 function initializeContentBehaviors() {
     setupSearchBoxes();
+    setupDevToolsShortcut();
     setupPopovers();
     setupClocks()
     setupCarousels();

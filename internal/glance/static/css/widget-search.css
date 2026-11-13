@@ -147,3 +147,10 @@
     background: var(--color-widget-background);
     color: var(--color-text-highlight);
 }
+
+.search-suggestion-tag {
+    margin-left: auto;
+    flex-shrink: 0;
+    font-size: var(--font-size-h6);
+    color: var(--color-text-subdue);
+}
