@@ -514,7 +514,7 @@ func (a *application) server() (func() error, func() error) {
 	}
 
 	mux.HandleFunc("/api/widgets/{widget}/{path...}", a.handleWidgetRequest)
-	mux.HandleFunc("GET /api/healthz", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 
